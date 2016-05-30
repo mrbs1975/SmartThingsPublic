@@ -1,19 +1,7 @@
 /**
- *  Copyright 2015 SmartThings
- *
- *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
- *  in compliance with the License. You may obtain a copy of the License at:
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
- *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
- *  for the specific language governing permissions and limitations under the License.
- *
  *  Ridiculously Automated Garage Door
  *
  *  Author: SmartThings
- *  Date: 2013-03-10
  *
  * Monitors arrival and departure of car(s) and
  *
@@ -28,7 +16,7 @@ definition(
     namespace: "smartthings",
     author: "SmartThings",
     description: "Monitors arrival and departure of car(s) and 1) opens door when car arrives, 2) closes door after car has departed (for N minutes), 3) opens door when car door motion is detected, 4) closes door when door was opened due to arrival and interior door is closed.",
-    category: "Convenience",
+    category: "SmartThings Labs",
     iconUrl: "https://s3.amazonaws.com/smartapp-icons/Meta/garage_contact.png",
     iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Meta/garage_contact@2x.png"
 )
@@ -36,12 +24,9 @@ definition(
 preferences {
 
 	section("Garage door") {
-		input "doorSensor", "capability.contactSensor", title: "Which sensor?"
-		input "doorSwitch", "capability.momentary", title: "Which switch?"
+		input "door", "capability.doorControl", title: "Which garage door controller?"
 		input "openThreshold", "number", title: "Warn when open longer than (optional)",description: "Number of minutes", required: false
-        input("recipients", "contact", title: "Send notifications to") {
-            input "phone", "phone", title: "Warn with text message (optional)", description: "Phone Number", required: false
-        }
+		input "phone", "phone", title: "Warn with text message (optional)", description: "Phone Number", required: false
 	}
 	section("Car(s) using this garage door") {
 		input "cars", "capability.presenceSensor", title: "Presence sensor", description: "Which car(s)?", multiple: true, required: false
@@ -68,7 +53,7 @@ def updated() {
 
 def subscribe() {
 	log.debug "present: ${cars.collect{it.displayName + ': ' + it.currentPresence}}"
-	subscribe(doorSensor, "contact", garageDoorContact)
+	subscribe(door, "door", garageDoorState)
 
 	subscribe(cars, "presence", carPresence)
 	subscribe(carDoorSensors, "acceleration", accelerationActive)
@@ -82,23 +67,17 @@ def doorOpenCheck()
 {
 	final thresholdMinutes = openThreshold
 	if (thresholdMinutes) {
-		def currentState = doorSensor.contactState
+		def currentState = door.doorState
 		log.debug "doorOpenCheck"
 		if (currentState?.value == "open") {
 			log.debug "open for ${now() - currentState.date.time}, openDoorNotificationSent: ${state.openDoorNotificationSent}"
 			if (!state.openDoorNotificationSent && now() - currentState.date.time > thresholdMinutes * 60 *1000) {
-				def msg = "${doorSwitch.displayName} was been open for ${thresholdMinutes} minutes"
+				def msg = "${door.displayName} was been open for ${thresholdMinutes} minutes"
 				log.info msg
-
-                if (location.contactBookEnabled) {
-                    sendNotificationToContacts(msg, recipients)
-                }
-                else {
-                    sendPush msg
-                    if (phone) {
-                        sendSms phone, msg
-                    }
-                }
+				sendPush msg
+				if (phone) {
+					sendSms phone, msg
+				}
 				state.openDoorNotificationSent = true
 			}
 		}
@@ -123,13 +102,13 @@ def carPresence(evt)
 		def recentNotPresentState = states.find{it.value == "not present"}
 
 		if (recentNotPresentState) {
-			log.debug "Not opening ${doorSwitch.displayName} since car was not present at ${recentNotPresentState.date}, less than ${openDoorAwayInterval} sec ago"
+			log.debug "Not opening ${door.displayName} since car was not present at ${recentNotPresentState.date}, less than ${openDoorAwayInterval} sec ago"
 		}
 		else {
-			if (doorSensor.currentContact == "closed") {
+			if (door.currentDoor == "closed") {
 				openDoor()
-                sendPush "Opening garage door due to arrival of ${car.displayName}"
-                state.appOpenedDoor = now()
+				sendPush "Opening garage door due to arrival of ${car.displayName}"
+				state.appOpenedDoor = now()
 			}
 			else {
 				log.debug "door already open"
@@ -138,21 +117,20 @@ def carPresence(evt)
 	}
 	else {
 		// A car departs
-		if (doorSensor.currentContact == "open") {
+		if (door.currentDoor == "open") {
 			closeDoor()
-			log.debug "Closing ${doorSwitch.displayName} after departure"
-            sendPush("Closing ${doorSwitch.displayName} after departure")
-
+			log.debug "Closing ${door.displayName} after departure"
+			sendPush("Closing ${door.displayName} after departure")
 		}
 		else {
-			log.debug "Not closing ${doorSwitch.displayName} because its already closed"
+			log.debug "Not closing ${door.displayName} because its already closed"
 		}
 	}
 }
 
-def garageDoorContact(evt)
+def garageDoorState(evt)
 {
-	log.info "garageDoorContact, $evt.name: $evt.value"
+	log.info "garageDoorState, $evt.name: $evt.value"
 	if (evt.value == "open") {
 		schedule("0 * * * * ?", "doorOpenCheck")
 	}
@@ -181,7 +159,7 @@ def accelerationActive(evt)
 {
 	log.info "$evt.name: $evt.value"
 
-	if (doorSensor.currentContact == "closed") {
+	if (door.currentDoor == "closed") {
 		log.debug "opening door when car door opened"
 		openDoor()
 	}
@@ -189,18 +167,12 @@ def accelerationActive(evt)
 
 private openDoor()
 {
-	if (doorSensor.currentContact == "closed") {
-		log.debug "opening door"
-		doorSwitch.push()
-	}
+	door.open()
 }
 
 private closeDoor()
 {
-	if (doorSensor.currentContact == "open") {
-		log.debug "closing door"
-		doorSwitch.push()
-	}
+	door.close()
 }
 
 private getCar(evt)
